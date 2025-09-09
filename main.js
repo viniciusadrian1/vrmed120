@@ -1,196 +1,116 @@
-// Cena 3D: Three.js + WebXR + GLTF do pulmão (ES Modules)
 import * as THREE from 'three';
-import { OrbitControls } from '/node_modules/three/examples/jsm/controls/OrbitControls.js';
-import { GLTFLoader } from '/node_modules/three/examples/jsm/loaders/GLTFLoader.js';
-import { VRButton } from '/node_modules/three/examples/jsm/webxr/VRButton.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
 
-let renderer; let scene; let camera; let controls; let lungRoot = null;
-let placeholderMesh = null; let axesHelper = null;
+// --- Variáveis principais ---
+let camera, scene, renderer;
+let controller;
+let lungModel;
 
-window.addEventListener('DOMContentLoaded', () => {
-  console.log('DOMContentLoaded - iniciando cena com ES Modules');
-  init();
-  animate();
-});
+init();
+animate();
 
 function init() {
-  console.log('init() chamado');
-  const container = document.getElementById('canvas-container');
-  if (!container) {
-    console.error('Container #canvas-container não encontrado');
-  }
-
-  // Renderer com WebXR habilitado
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  // Usa tamanho do container para não cobrir o chat lateral
-  const rect = container.getBoundingClientRect();
-  renderer.setSize(rect.width, rect.height);
-  renderer.xr.enabled = true;
-  container.appendChild(renderer.domElement);
-
-  // Cena e câmera
+  // Cena
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0f172a); // slate-900
 
-  camera = new THREE.PerspectiveCamera(60, (rect.width || 1) / (rect.height || 1), 0.01, 100);
-  camera.position.set(0.5, 0.3, 0.8);
+  // Câmera
+  camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
-  // Luzes tipo estúdio
-  const ambient = new THREE.AmbientLight(0xffffff, 0.6);
-  scene.add(ambient);
-  const dir1 = new THREE.DirectionalLight(0xffffff, 0.8);
-  dir1.position.set(1, 1, 1);
-  scene.add(dir1);
-  const dir2 = new THREE.DirectionalLight(0xffffff, 0.5);
-  dir2.position.set(-1, 0.5, -0.5);
-  scene.add(dir2);
+  // Renderizador: alpha true para permitir ver a câmera do dispositivo por trás
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.xr.enabled = true;
+  renderer.setClearColor(0x000000, 0); // transparente
+  renderer.domElement.style.position = 'absolute';
+  renderer.domElement.style.top = '0';
+  renderer.domElement.style.left = '0';
+  renderer.domElement.style.width = '100%';
+  renderer.domElement.style.height = '100%';
+  renderer.domElement.style.touchAction = 'none';
+  document.body.appendChild(renderer.domElement);
 
-  // Ajudas visuais para debug
-  axesHelper = new THREE.AxesHelper(0.2);
-  scene.add(axesHelper);
-  // const grid = new THREE.GridHelper(2, 20, 0x334155, 0x1e293b); scene.add(grid);
+  // ARButton: inicia sessão AR; 'local-floor' ajuda a manter medidas em metros
+  document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['local-floor'] }));
 
-  // Placeholder para validar renderização até o pulmão carregar
-  const placeholderGeo = new THREE.BoxGeometry(0.1, 0.1, 0.1);
-  const placeholderMat = new THREE.MeshStandardMaterial({ color: 0x22c55e });
-  placeholderMesh = new THREE.Mesh(placeholderGeo, placeholderMat);
-  scene.add(placeholderMesh);
-  console.log('Placeholder adicionado');
+  // Luz básica
+  const hemi = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1.0);
+  scene.add(hemi);
 
-  // Controles de órbita (Modo Mouse)
-  controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
-  controls.minDistance = 0.1;
-  controls.maxDistance = 3.0;
-
-  // Carrega o modelo GLB do pulmão
+  // Carregador GLTF
   const loader = new GLTFLoader();
   loader.load(
     'models/lung.glb',
     (gltf) => {
-      lungRoot = gltf.scene || gltf.scenes[0];
-      centerAndScaleModel(lungRoot);
-      scene.add(lungRoot);
-      if (placeholderMesh) {
-        scene.remove(placeholderMesh);
-        placeholderMesh.geometry.dispose();
-        placeholderMesh.material.dispose();
-        placeholderMesh = null;
+      lungModel = gltf.scene;
+
+      // --- ESCALA: ajustar para ~30cm de altura ---
+      const bbox = new THREE.Box3().setFromObject(lungModel);
+      const size = new THREE.Vector3();
+      bbox.getSize(size);
+
+      const targetHeight = 0.30; // metros (30 cm)
+      if (size.y > 1e-6) {
+        const uniformScale = targetHeight / size.y;
+        lungModel.scale.setScalar(uniformScale);
+      } else {
+        // fallback conservador
+        lungModel.scale.setScalar(0.3);
       }
-      console.log('pulmão carregado com sucesso');
+
+      // --- POSIÇÃO INICIAL: 1.2m do chão, 0.5m à frente da câmera ---
+      lungModel.position.set(0, 1.2, -0.5);
+
+      scene.add(lungModel);
     },
-    (xhr) => {
-      // progresso opcional
-      if (xhr.total) {
-        const pct = ((xhr.loaded / xhr.total) * 100).toFixed(0);
-        if (pct % 10 === 0) console.log(`Carregando pulmão: ${pct}%`);
-      }
-    },
-    (error) => {
-      console.error('Falha ao carregar models/lung.glb', error);
-      const errorLabel = document.createElement('div');
-      errorLabel.style.position = 'absolute';
-      errorLabel.style.top = '56px';
-      errorLabel.style.left = '16px';
-      errorLabel.style.padding = '8px 12px';
-      errorLabel.style.background = 'rgba(239,68,68,0.15)';
-      errorLabel.style.border = '1px solid #7f1d1d';
-      errorLabel.style.color = '#fecaca';
-      errorLabel.style.borderRadius = '6px';
-      errorLabel.style.fontFamily = 'ui-sans-serif, system-ui';
-      errorLabel.style.fontSize = '12px';
-      errorLabel.textContent = 'Erro ao carregar o modelo: verifique se models/lung.glb existe.';
-      document.body.appendChild(errorLabel);
+    undefined,
+    (err) => {
+      console.error('Erro ao carregar models/lung.glb:', err);
     }
   );
 
-  // VR Button (oficial Three.js)
-  document.getElementById('vrButtonContainer').appendChild(VRButton.createButton(renderer));
-
-  // Reset câmera
-  document.getElementById('resetCameraBtn').addEventListener('click', resetCamera);
-  document.getElementById('toggleAxesBtn').addEventListener('click', () => {
-    if (axesHelper) axesHelper.visible = !axesHelper.visible;
-  });
-  document.getElementById('mouseModeBtn').addEventListener('click', () => {
-    if (renderer?.xr?.isPresenting) {
-      const session = renderer.xr.getSession();
-      if (session) session.end();
-    }
-  });
+  // --- Controller XR: permitir "pegar/soltar" com controlador / mão ---
+  controller = renderer.xr.getController(0);
+  controller.addEventListener('selectstart', onSelectStart);
+  controller.addEventListener('selectend', onSelectEnd);
+  scene.add(controller);
 
   // Resize
   window.addEventListener('resize', onWindowResize);
 }
 
-function centerAndScaleModel(root) {
-  // Centraliza em torno da origem e ajusta escala para tamanho real aproximado (~25 cm)
-  const box = new THREE.Box3().setFromObject(root);
-  const size = new THREE.Vector3();
-  const center = new THREE.Vector3();
-  box.getSize(size);
-  box.getCenter(center);
-
-  // Centralizar no (0, 0, 0)
-  root.position.sub(center);
-
-  // Escala alvo: maior dimensão ~ 0.25 m (25 cm)
-  const targetMax = 0.25;
-  const currentMax = Math.max(size.x, size.y, size.z) || 1.0;
-  const scale = targetMax / currentMax;
-  root.scale.setScalar(scale);
-}
-
-function addVRButton() {
-  // Import dinâmico do VRButton (usando o módulo ESM da pasta examples)
-  // Como estamos em script tradicional, criamos manualmente o botão WebXR
-  if ('xr' in navigator) {
-    navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
-      const btn = document.createElement('button');
-      btn.className = 'webxr-button';
-      btn.textContent = supported ? 'Entrar em VR' : 'VR não suportado';
-      btn.disabled = !supported;
-      btn.addEventListener('click', () => {
-        if (!supported) return;
-        if (renderer.xr.isPresenting) {
-          renderer.xr.getSession().end();
-        } else {
-          navigator.xr.requestSession('immersive-vr', {
-            requiredFeatures: ['local-floor'],
-            optionalFeatures: ['bounded-floor', 'hand-tracking']
-          }).then((session) => {
-            renderer.xr.setSession(session);
-            btn.textContent = 'Sair do VR';
-            session.addEventListener('end', () => (btn.textContent = 'Entrar em VR'));
-          });
-        }
-      });
-      document.getElementById('vrButtonContainer').appendChild(btn);
-    });
-  } else {
-    const btn = document.createElement('button');
-    btn.className = 'webxr-button';
-    btn.textContent = 'VR não suportado';
-    btn.disabled = true;
-    document.getElementById('vrButtonContainer').appendChild(btn);
+function onSelectStart() {
+  if (!lungModel) return;
+  try {
+    controller.attach(lungModel);
+  } catch (e) {
+    console.warn('attach falhou, tentando alternativa:', e);
+    // fallback: remove/adicionar manualmente
+    try {
+      scene.remove(lungModel);
+    } catch {}
+    controller.add(lungModel);
   }
 }
 
-function resetCamera() {
-  camera.position.set(0.5, 0.3, 0.8);
-  controls.target.set(0, 0, 0);
-  controls.update();
+function onSelectEnd() {
+  if (!lungModel) return;
+  try {
+    scene.attach(lungModel);
+  } catch (e) {
+    console.warn('attach para cena falhou, tentando fallback:', e);
+    try {
+      controller.remove(lungModel);
+    } catch {}
+    scene.add(lungModel);
+  }
 }
 
 function onWindowResize() {
-  const container = document.getElementById('canvas-container');
-  const rect = container.getBoundingClientRect();
-  camera.aspect = (rect.width || 1) / (rect.height || 1);
+  camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
-  renderer.setSize(rect.width, rect.height);
-  console.log('Resize ->', rect.width, rect.height);
+  renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
 function animate() {
@@ -198,16 +118,5 @@ function animate() {
 }
 
 function render() {
-  if (controls) controls.update();
-  if (placeholderMesh) {
-    placeholderMesh.rotation.y += 0.01;
-  }
   renderer.render(scene, camera);
 }
-
-// Log global de erros para diagnóstico
-window.addEventListener('error', (e) => {
-  console.error('GlobalError:', e.message, e.filename, e.lineno);
-});
-
-
